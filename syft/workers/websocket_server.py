@@ -1,13 +1,25 @@
 import binascii
+import random
 from typing import Union
 from typing import List
 
-import asyncio
+#import asyncio
 import torch
-import websockets
-
+#import websockets
+import syft as sy
+from syft.codes import MSGTYPE
 from syft.frameworks.torch.tensors.interpreters import AbstractTensor
+from syft.frameworks.torch.tensors.interpreters import PointerTensor
 from syft.workers.virtual import VirtualWorker
+from .websocket_client import WebsocketBridge, WebsocketClientWorker
+from syft.workers import AbstractWorker
+from syft.workers import IdProvider
+from syft.codes import MSGTYPE
+from typing import Union
+from typing import List
+from typing import Callable
+
+from simple_websocket_server import WebSocketServer, WebSocket
 
 
 class WebsocketServerWorker(VirtualWorker):
@@ -45,33 +57,10 @@ class WebsocketServerWorker(VirtualWorker):
         self.port = port
         self.host = host
 
-        if loop is None:
-            loop = asyncio.new_event_loop()
-
-        # this queue is populated when messages are received
-        # from a client
-        self.broadcast_queue = asyncio.Queue()
-
-        # this is the asyncio event loop
-        self.loop = loop
-
         # call BaseWorker constructor
         super().__init__(hook=hook, id=id, data=data, log_msgs=log_msgs, verbose=verbose)
 
-    async def _consumer_handler(self, websocket: websockets.WebSocketCommonProtocol):
-        """This handler listens for messages from WebsocketClientWorker
-        objects.
-
-        Args:
-            websocket: the connection object to receive messages from and
-                add them into the queue.
-
-        """
-        while True:
-            msg = await websocket.recv()
-            await self.broadcast_queue.put(msg)
-
-    async def _producer_handler(self, websocket: websockets.WebSocketCommonProtocol):
+    async def _producer_handler(self, websocket):
         """This handler listens to the queue and processes messages as they
         arrive.
 
@@ -98,28 +87,98 @@ class WebsocketServerWorker(VirtualWorker):
             # send the response
             await websocket.send(response)
 
-    async def _handler(self, websocket: websockets.WebSocketCommonProtocol, *unused_args):
+    async def send_obj(self, tensor, worker):
+        await worker.async_send_msg(MSGTYPE.OBJ, tensor)
+
+    async def send(
+        self,
+        tensor: Union[torch.Tensor, AbstractTensor],
+        worker: "BaseWorker",
+        ptr_id: Union[str, int] = None,
+    ) -> PointerTensor:
+        """Sends tensor to the worker(s).
+        Returns:
+            A PointerTensor object representing the pointer to the remote worker(s).
+        """
+
+        if ptr_id is None:  # Define a remote id if not specified
+            ptr_id = int(10e10 * random.random())
+
+        pointer = tensor.create_pointer(
+            owner=self, location=worker, id_at_location=tensor.id, register=True, ptr_id=ptr_id
+        )
+
+        # Send the object
+        #await self.send_obj(tensor, worker)
+        asyncio.run(self.send_obj(tensor, worker))
+        raise "FOO"
+
+        return pointer
+
+
+    async def _handler(self, websocket):
         """Setup the consumer and producer response handlers with asyncio.
 
         Args:
             websocket: the websocket connection to the client
 
         """
+#        tensor = a
+#        ptr_id = int(10e10 * random.random())
+#        pointer = tensor.create_pointer(
+#            owner=self,
+#            location=worker,
+#            id_at_location=tensor.id,
+#            register=True,
+#            ptr_id=ptr_id
+#        )
+#        await worker.async_send_msg(MSGTYPE.OBJ, a, websocket)
+        pointer = await self.send(a, worker)
+        print(pointer)
 
-        asyncio.set_event_loop(self.loop)
-        consumer_task = asyncio.ensure_future(self._consumer_handler(websocket))
-        producer_task = asyncio.ensure_future(self._producer_handler(websocket))
 
-        done, pending = await asyncio.wait(
-            [consumer_task, producer_task], return_when=asyncio.FIRST_COMPLETED
-        )
+    def handle(self):
+        # echo message back to client
+        self.send_message(self.data)
 
-        for task in pending:
-            task.cancel()
+    def connected(self):
+        print(self.address, 'connected')
+
+    def handle_close(self):
+        print(self.address, 'closed')
+
 
     def start(self):
         """Start the server"""
+        hook = self.hook
 
-        start_server = websockets.serve(self._handler, self.host, self.port)
-        asyncio.get_event_loop().run_until_complete(start_server)
-        asyncio.get_event_loop().run_forever()
+        class SocketClient(WebSocket):
+            def handle(self):
+                print("GOT FROM CLIENT", self.data)
+                self.worker.messages.append(self.data)
+#                self.worker.last_msg = self.data
+
+            def connected(self):
+                print('connected', self)
+
+#                self.send_message("FOO")
+                # plan
+                a = torch.ones(2)
+                a = a + 4
+                print(a)
+                self.worker = WebsocketBridge(hook=hook, client=self)
+                a = a.send(self.worker)
+
+        #            pointer = self.bridge.send(a, worker)
+
+
+
+            def handle_close(self):
+                print(self.address, 'closed')
+
+
+
+        server = WebSocketServer(self.host, self.port, SocketClient)
+        server.serve_forever()
+
+

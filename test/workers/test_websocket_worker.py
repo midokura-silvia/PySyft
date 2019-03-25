@@ -1,5 +1,6 @@
 import torch
 import time
+import binascii
 from syft.workers import WebsocketClientWorker
 from syft.workers import WebsocketServerWorker
 from multiprocessing import Process

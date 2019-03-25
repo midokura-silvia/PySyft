@@ -212,13 +212,15 @@ class BaseWorker(AbstractWorker):
 
         # Step 0: deserialize message
         (msg_type, contents) = sy.serde.deserialize(bin_message, worker=self)
+        print(msg_type, contents)
         if self.verbose:
             print(f"worker {self} received {sy.codes.code2MSGTYPE[msg_type]} {contents}")
         # Step 1: route message to appropriate function
         response = self._message_router[msg_type](contents)
-
+        print(response)
         # Step 2: Serialize the message to simple python objects
         bin_response = sy.serde.serialize(response)
+        print(bin_response)
 
         return bin_response
 
