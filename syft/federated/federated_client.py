@@ -1,21 +1,30 @@
-from typing import Union
-
 import torch as th
 from torch import nn
+from torch.utils.data import BatchSampler, RandomSampler, SequentialSampler
+import logging
 
 from syft.generic import ObjectStorage
 from syft.federated.train_config import TrainConfig
+
+logger = logging.getLogger(__name__)
 
 
 class FederatedClient(ObjectStorage):
     """A Client able to execute federated learning in a defined dataset."""
 
-    def __init__(self):
+    def __init__(self, datasets=None):
         super().__init__()
-        self.dataset = None
+        self.datasets = datasets if datasets is not None else dict()
         self.optimizer = None
         self.train_config = None
         self.parameters = []
+
+    def add_dataset(self, dataset, key: str):
+        self.datasets[key] = dataset
+
+    def remove_dataset(self, key: str):
+        if key in self.datasets:
+            del self.datasets[key]
 
     def set_obj(self, obj: object):
         """Registers objects checking if which objects it should cache.
@@ -59,19 +68,57 @@ class FederatedClient(ObjectStorage):
     def fit(self, *args, **kwargs):
         if self.train_config is None:
             raise ValueError("TrainConfig not defined.")
+        if self.datasets is None:
+            logger.error("No dataset available on worker")
+            return None, -1
+        try:
+            key = kwargs["dataset"]
+        except KeyError:
+            logger.warning("Missing keyword argument 'dataset'.")
+            if len(self.datasets) == 1:
+                logger.warning("Only one dataset available, using this one.")
+                key = list(self.datasets.keys())[0]
+            else:
+                logger.warning("Available datasets: %s", list(self.datasets.keys()))
+                return None, -1
 
         self._build_optimizer(self.train_config.optimizer, self.train_config.lr)
-        self._fit()
+        return self._fit(key)
 
-    def _fit(self):
+    def _fit(self, key):
         # TODO: how to get the actual model?
         # self.model.train()
-        # TODO: how to create/set a dataset?
-        for data, target in self.dataset:
+        logger.setLevel(logging.DEBUG)
+        logger.debug("train_config = %s", self.train_config)
+        logger.debug("datasets[%s] = %s", key, self.datasets[key])
+        logger.debug("nr objects = %s", len(self._objects))
+        for id in self._objects:
+            logger.debug("id: %s, obj: %s", id, self._objects[id])
+        data_range = range(len(self.datasets[key]))
+        shuffle = False
+        drop_last = True
+        if shuffle:
+            sampler = RandomSampler(data_range)
+        else:
+            sampler = SequentialSampler(data_range)
+        batch_sampler = BatchSampler(sampler, self.train_config.batch_size, drop_last)
+        loss = -1.0
+        for data_indices in batch_sampler:
+            logger.debug("data_indices = %s", data_indices)
+            data, target = self.datasets[key][data_indices]
+            logger.debug("data = %s", data)
+            logger.debug("target = %s", target)
+            self.register_obj(data)
+            self.register_obj(target)
             self.optimizer.zero_grad()
             output = self.train_config.forward_plan(data)
+            self.register_obj(output)
             loss = self.train_config.loss_plan(output, target)
             loss.backward()
             self.optimizer.step()
-        # TODO: check if multiple returns are supported.
-        return self.model.get(), loss.get()
+            self.de_register_obj(output)
+            self.de_register_obj(data)
+            self.de_register_obj(target)
+            logger.info("loss: %s", loss)
+
+        return loss
