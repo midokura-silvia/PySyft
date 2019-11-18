@@ -13,7 +13,11 @@ def read(fname):
 
 
 REQ_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pip-dep")
-core_reqs = read(os.path.join(REQ_DIR, "requirements.txt")).split("\n")
+if "REQUIREMENTS_SYFT" in os.environ:
+    core_reqs_file = os.environ["REQUIREMENTS_SYFT"]
+else:
+    core_reqs_file = "requirements.txt"
+core_reqs = read(os.path.join(REQ_DIR, core_reqs_file)).split("\n")
 udacity_extras = read(os.path.join(REQ_DIR, "requirements_udacity.txt")).split("\n")
 tensorflow_extras = read(os.path.join(REQ_DIR, "requirements_tensorflow.txt")).split("\n")
 sandbox_extras = ["scikit-learn>=0.21.0"]
