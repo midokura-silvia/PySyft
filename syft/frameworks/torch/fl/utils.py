@@ -104,16 +104,20 @@ def accuracy(pred_softmax, target):
     return (pred.float() == target.view(pred.shape).float()).sum().numpy() / float(nr_elems)
 
 
-def create_gaussian_mixture_toy_data(nr_samples: int):  # pragma: no cover
+def create_gaussian_mixture_toy_data(
+    nr_samples: int, mu_0: float = 0, mu_1: float = 2
+):  # pragma: no cover
     """ Create a simple toy data for binary classification
 
     The data is drawn from two normal distributions
-    target = 1: mu = 2, sigma = 1
-    target = 0: mu = 0, sigma = 1
+    target = 1: mu = mu_0, sigma = 1
+    target = 0: mu = mu_1, sigma = 1
     The dataset is balanced with an equal number of positive and negative samples
 
     Args:
         nr_samples: number of samples to generate
+        mu_0: mean value of the first normal distribution
+        mu_1: mean value of the second normal distribution
 
     Returns:
         data, targets
@@ -122,8 +126,8 @@ def create_gaussian_mixture_toy_data(nr_samples: int):  # pragma: no cover
     """
     sample_dim = 2
     one_half = int(nr_samples / 2)
-    X1 = torch.randn(one_half, sample_dim, requires_grad=True)
-    X2 = torch.randn(one_half, sample_dim, requires_grad=True) + 2
+    X1 = torch.randn(one_half, sample_dim, requires_grad=True) + mu_0
+    X2 = torch.randn(one_half, sample_dim, requires_grad=True) + mu_1
     X = torch.cat([X1, X2], dim=0)
     Y1 = torch.zeros(one_half, requires_grad=False).long()
     Y2 = torch.ones(one_half, requires_grad=False).long()

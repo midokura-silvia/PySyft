@@ -62,16 +62,16 @@ call_testing = [
     "0.0.0.0",
 ]
 
-print("Starting server for Alice")
+print("Starting server for Alice: {}".format(" ".join(call_alice)))
 process_alice = subprocess.Popen(call_alice)
 
-print("Starting server for Bob")
+print("Starting server for Bob: {}".format(" ".join(call_bob)))
 process_bob = subprocess.Popen(call_bob)
 
-print("Starting server for Charlie")
+print("Starting server for Charlie: {}".format(" ".join(call_charlie)))
 process_charlie = subprocess.Popen(call_charlie)
 
-print("Starting server for Testing")
+print("Starting server for Testing: {}".format(" ".join(call_testing)))
 process_testing = subprocess.Popen(call_testing)
 
 
