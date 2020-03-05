@@ -148,7 +148,7 @@ def test_train_config_with_jit_trace_send_twice_with_fit(hook, workers):  # prag
     torch.manual_seed(0)
     alice = workers["alice"]
     model, loss_fn, data, target, loss_before, dataset_key = prepare_training(
-        hook, alice, nr_samples=100, mu_0=-10, mu_1=10
+        alice, nr_samples=100, mu_0=-10, mu_1=10
     )
 
     # Create and send train config
@@ -205,11 +205,25 @@ def test_train_config_with_jit_trace_send_twice_with_fit(hook, workers):  # prag
 
 
 def print_training_result(pred, target):  # pragma: no cover
-    print("Predictions: {}".format(pred.detach().numpy().reshape(1, -1)))
+    is_pytorch = True if hasattr(pred, "detach") else False
+    if is_pytorch:
+        pred_numpy = pred.max(1).values.view_as(target).detach().numpy()
+        pred_converted = pred.argmax(1)
+        accuracy = (pred.argmax(1) == target).sum().item() / float(len(target))
+    else:
+        pred_numpy = pred
+        pred_converted = pred.reshape(1, -1)
+        abs_difference = abs(pred_numpy - target)
+        accuracy = (abs_difference < 0.5).sum() / float(len(target))
+
+    print("Predictions: {}".format(pred_converted))
     print("Targets    : {}".format(target.reshape(1, -1)))
+    # abs_difference = (pred.argmax(1).view_as(target) - target).abs() if is_pytorch else abs(pred_numpy - target)
     print(
         "Accuracy: {}".format(
-            ((pred.view_as(target) - target).abs() < 0.5).sum() / float(len(target))
+            # (abs_difference < 0.5).sum() / float(len(target))
+            # (pred.argmax(1) == target).sum().item()
+            accuracy
         )
     )
 
@@ -223,18 +237,39 @@ def print_trained_model_weights_and_bias(model):  # pragma: no cover
     print("fc3.bias: {}".format(model.fc3._parameters["bias"]))
 
 
-def local_training_with_train_config(model, loss_fn, train_config, data, target):
+def local_training_with_train_config(
+    model, loss_fn, train_config, data, target, dataset=None
+):  # pragma: no cover
     model.train()
     optimizer_class = getattr(torch.optim, train_config.optimizer)
     optimizer = optimizer_class(model.parameters(), **train_config.optimizer_args)
     # optimizer = torch.optim.Adam(model.parameters(), **(train_config.optimizer_args))
-    for epoch in range(train_config.epochs * 5):
+
+    def loss_fn_v2(pred, target):
+        return torch.nn.CrossEntropyLoss()(pred, target)
+
+    def training_step(model, data, target, optimizer, epoch):
         output = model(data)
-        loss = loss_fn(pred=output, target=target)
+        loss = loss_fn_v2(pred=output, target=target)
+        # print(data)
+        # print(output)
+        # print(output.size())
+        # print(target.size())
+        # loss = loss_fn(pred=output, target=target)
         loss.backward()
         optimizer.step()
         if (epoch + 1) % 10 == 0:
             print("epoch: {}, loss: {}".format(epoch, loss))
+
+    for epoch in range(train_config.epochs * 5):
+        if dataset:
+            for data, target in dataset:
+                print("data, target:")
+                print(data)
+                print(target)
+                training_step(model, data, target, optimizer, epoch)
+        else:
+            training_step(model, data, target, optimizer, epoch)
 
 
 def prepare_training(alice, nr_samples=100, mu_0=-1, mu_1=1):  # pragma: no cover
@@ -255,7 +290,8 @@ def prepare_training_additional_output(alice, nr_samples=100, mu_0=-1, mu_1=1): 
 
     @torch.jit.script
     def loss_fn(pred, target):
-        return ((target.float() - pred.float()) ** 2).mean()
+        # return torch.nn.nll_loss(torch.log_softmax(pred, 1), target) #torch.nn.CrossEntropyLoss()(pred, target)
+        return ((target.float() - pred.max(1).indices.float()) ** 2).mean()
 
     class Net(torch.nn.Module):
         def __init__(self):
@@ -272,8 +308,9 @@ def prepare_training_additional_output(alice, nr_samples=100, mu_0=-1, mu_1=1): 
         def forward(self, x):
             # x = self.bn(x)
             x = F.relu(self.fc1(x))
-            x = F.relu(self.fc2(x))
-            x = self.fc3(x)
+            x = self.fc2(x)
+            # x = F.relu(self.fc2(x))
+            # x = self.fc3(x)
             return x
 
     model_untraced = Net()
@@ -299,8 +336,8 @@ def test___str__():
 def test_local_training(workers):
     alice = workers["alice"]
 
-    mu_0 = 1
-    mu_1 = 5
+    mu_0 = -10
+    mu_1 = 10
     model, loss_fn, data, target, loss_before, dataset_key, dataset, model_untraced = prepare_training_additional_output(
         alice, nr_samples=64, mu_0=mu_0, mu_1=mu_1
     )
@@ -308,17 +345,34 @@ def test_local_training(workers):
     train_config = sy.TrainConfig(
         model=None,
         loss_fn=None,
-        batch_size=10,
+        batch_size=16,
         optimizer="SGD",
-        optimizer_args={"lr": 0.001, "weight_decay": 0.01},
+        optimizer_args={"lr": 0.01, "weight_decay": 0.001},
         epochs=10,
         shuffle=True,
     )
     local_training_with_train_config(
-        model=model_untraced, loss_fn=loss_fn, train_config=train_config, data=data, target=target
+        model=model_untraced,
+        loss_fn=loss_fn,
+        train_config=train_config,
+        data=data,
+        target=target,
+        dataset=None,
     )
 
+    from sklearn.svm import SVC
+
+    svm_classifier = SVC(kernel="linear")
+    svm_classifier.fit(X=data.detach().numpy(), y=target.detach().numpy())
+
+    pred_SVM = svm_classifier.predict(data.detach().numpy())
+    print("SVM")
+    print_training_result(pred_SVM, target.detach().numpy())
+
     print_trained_model_weights_and_bias(model_untraced)
+    pred = model(data)
+    print("Pytorch")
+    print_training_result(pred, target)
 
     data_test, target_test = utils.create_gaussian_mixture_toy_data(
         nr_samples=64, mu_0=mu_0, mu_1=mu_1
